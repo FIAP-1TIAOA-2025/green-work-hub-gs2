@@ -5,3 +5,8 @@ seaborn
 jupyter
 scikit-learn
 joblib
+fastapi
+uvicorn[standard]
+psycopg2-binary
+sqlalchemy
+python-dotenv

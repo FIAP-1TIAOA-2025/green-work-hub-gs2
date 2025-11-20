@@ -1,6 +1,13 @@
 import numpy as np
 import pandas as pd
 from datetime import datetime
+import os
+import sys
+
+# Adicionar o diretório src ao path para importar database
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+from database import SessionLocal, EnergyReading, init_db
 
 # =========================
 # 1) CONFIGURAÇÃO GLOBAL
@@ -198,18 +205,73 @@ df_energy["emissoes_tco2e"] = df_energy["emissoes_kgco2e"] / 1000.0
 
 
 # =========================================
-# 8) EXPORTAR
+# 8) SALVAR NO BANCO DE DADOS
 # =========================================
 
-# colunas finais úteis para ingest
-cols_export = [
-    "ts", "org_id", "site_id", "andar", "device_id", "device_type",
-    "kw", "kwh_interval", "emissoes_tco2e", "temp_ext",
-    "eh_fds", "eh_horario_comercial", "is_anomaly"
-]
+def salvar_no_banco():
+    """Salva os dados gerados no banco de dados PostgreSQL"""
+    print("Inicializando banco de dados...")
+    init_db()
+    
+    print("Preparando dados para inserção...")
+    # Preparar dados para inserção
+    cols_export = [
+        "ts", "org_id", "site_id", "andar", "device_id", "device_type",
+        "kw", "kwh_interval", "emissoes_tco2e", "temp_ext",
+        "eh_fds", "eh_horario_comercial", "is_anomaly"
+    ]
+    
+    df_export = df_energy[cols_export].sort_values(["site_id", "andar", "device_id", "ts"])
+    
+    print(f"Inserindo {len(df_export):,} registros no banco de dados...")
+    
+    db = SessionLocal()
+    try:
+        # Inserir em lotes para melhor performance
+        batch_size = 1000
+        total_rows = len(df_export)
+        
+        for i in range(0, total_rows, batch_size):
+            batch = df_export.iloc[i:i+batch_size]
+            
+            records = []
+            for _, row in batch.iterrows():
+                record = EnergyReading(
+                    ts=row['ts'],
+                    org_id=row['org_id'],
+                    site_id=row['site_id'],
+                    andar=int(row['andar']),
+                    device_id=row['device_id'],
+                    device_type=row['device_type'],
+                    kw=float(row['kw']),
+                    kwh_interval=float(row['kwh_interval']),
+                    emissoes_tco2e=float(row['emissoes_tco2e']),
+                    temp_ext=float(row['temp_ext']),
+                    eh_fds=bool(row['eh_fds']),
+                    eh_horario_comercial=bool(row['eh_horario_comercial']),
+                    is_anomaly=bool(row['is_anomaly'])
+                )
+                records.append(record)
+            
+            db.add_all(records)
+            db.commit()
+            
+            if (i + batch_size) % 10000 == 0 or (i + batch_size) >= total_rows:
+                print(f"  Progresso: {min(i + batch_size, total_rows):,} / {total_rows:,} registros inseridos")
+        
+        print(f"✓ {total_rows:,} registros inseridos com sucesso no banco de dados!")
+        
+    except Exception as e:
+        db.rollback()
+        print(f"✗ Erro ao inserir dados: {e}")
+        raise
+    finally:
+        db.close()
 
-df_export = df_energy[cols_export].sort_values(["site_id", "andar", "device_id", "ts"])
 
-df_export.to_csv("energy_readings_sinteticos.csv", index=False)
-print("Arquivo gerado: energy_readings_sinteticos.csv")
-print(df_export.head())
+if __name__ == "__main__":
+    # Se executado diretamente, salvar no banco
+    salvar_no_banco()
+else:
+    # Se importado, apenas definir a função
+    pass

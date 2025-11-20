@@ -11,34 +11,61 @@ import numpy as np
 import joblib
 import json
 import sys
+import os
 from datetime import datetime
 
 def carregar_modelo_e_preprocessadores():
     """Carrega o modelo e preprocessadores salvos"""
+    # Obter diretório base do projeto (um nível acima de src/)
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    models_dir = os.path.join(base_dir, 'models')
+    
     try:
-        # Tentar carregar o melhor modelo (Random Forest ou Gradient Boosting)
-        try:
-            modelo = joblib.load('../models/modelo_consumo_mensal_random_forest_regressor.pkl')
-            modelo_nome = "Random Forest"
-        except:
-            try:
-                modelo = joblib.load('../models/modelo_consumo_mensal_gradient_boosting_regressor.pkl')
-                modelo_nome = "Gradient Boosting"
-            except:
-                modelo = joblib.load('../models/modelo_consumo_mensal_linear_regression.pkl')
-                modelo_nome = "Linear Regression"
+        # Tentar carregar o melhor modelo (tentar vários nomes possíveis)
+        modelo = None
+        modelo_nome = None
         
-        scaler = joblib.load('../models/scaler.pkl')
-        le_site = joblib.load('../models/label_encoder_site.pkl')
-        le_device = joblib.load('../models/label_encoder_device.pkl')
+        # Lista de possíveis nomes de modelos
+        possiveis_modelos = [
+            ('modelo_consumo_mensal_random_forest_regressor.pkl', 'Random Forest'),
+            ('modelo_consumo_mensal_gradient_boosting_regressor.pkl', 'Gradient Boosting'),
+            ('modelo_consumo_mensal_linear_regression.pkl', 'Linear Regression'),
+            ('modelo_consumo_mensal_ridge_regression.pkl', 'Ridge Regression'),
+            ('modelo_consumo_mensal_lasso_regression.pkl', 'Lasso Regression')
+        ]
         
-        with open('../models/features.json', 'r') as f:
+        for arquivo, nome in possiveis_modelos:
+            caminho = os.path.join(models_dir, arquivo)
+            if os.path.exists(caminho):
+                modelo = joblib.load(caminho)
+                modelo_nome = nome
+                break
+        
+        if modelo is None:
+            raise FileNotFoundError("Nenhum modelo encontrado. Execute ml_consumo_mensal.py primeiro.")
+        
+        # Carregar preprocessadores
+        scaler_path = os.path.join(models_dir, 'scaler.pkl')
+        le_site_path = os.path.join(models_dir, 'label_encoder_site.pkl')
+        le_device_path = os.path.join(models_dir, 'label_encoder_device.pkl')
+        features_path = os.path.join(models_dir, 'features.json')
+        
+        if not all(os.path.exists(p) for p in [scaler_path, le_site_path, le_device_path, features_path]):
+            raise FileNotFoundError("Arquivos de preprocessamento não encontrados.")
+        
+        scaler = joblib.load(scaler_path)
+        le_site = joblib.load(le_site_path)
+        le_device = joblib.load(le_device_path)
+        
+        with open(features_path, 'r') as f:
             features = json.load(f)
         
         return modelo, modelo_nome, scaler, le_site, le_device, features
     except Exception as e:
         print(f"Erro ao carregar modelo: {e}")
-        print("Certifique-se de que o modelo foi treinado primeiro.")
+        print(f"Procurando modelos em: {models_dir}")
+        print("Certifique-se de que o modelo foi treinado primeiro executando:")
+        print("  python3 src/ml_consumo_mensal.py")
         sys.exit(1)
 
 
