@@ -1,0 +1,11 @@
+# Configuração do Wokwi para ESP32
+# Especifica as bibliotecas necessárias para compilação
+# Sensores físicos removidos - apenas simulação
+
+[wokwi]
+version = 1
+firmware = "src/main.ino"
+
+[[libraries]]
+name = "ArduinoJson"
+version = "6.21.3"
