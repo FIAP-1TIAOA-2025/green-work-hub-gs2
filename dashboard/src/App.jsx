@@ -1,137 +1,195 @@
-import React, { useState, useEffect } from 'react';
-import { Activity, Zap, TrendingUp, TrendingDown, AlertTriangle, Wifi, WifiOff } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Activity, Zap, TrendingUp, TrendingDown, AlertTriangle, Wifi, WifiOff, RefreshCw } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, AreaChart, Area } from 'recharts';
 
 const IoTEnergyMonitor = () => {
   const [devices, setDevices] = useState([]);
   const [selectedDevice, setSelectedDevice] = useState(null);
   const [historicalData, setHistoricalData] = useState([]);
-  const [isSimulating, setIsSimulating] = useState(false);
+  const [isConnected, setIsConnected] = useState(false);
   const [alerts, setAlerts] = useState([]);
   const [globalStats, setGlobalStats] = useState({
     totalKwh: 0,
     totalDevices: 0,
     activeDevices: 0,
-    avgPowerFactor: 0
+    totalEmissions: 0
   });
+  const [lastUpdate, setLastUpdate] = useState(null);
+  const [apiUrl] = useState(import.meta.env.VITE_API_URL || 'http://localhost:8000');
+  const lastTimestampRef = useRef(null);
 
   // Fatores de emissão (kgCO2e/kWh)
-  const EMISSION_FACTOR = 0.233; // Brasil (média nacional)
+  const EMISSION_FACTOR = 0.08; // Fator usado no projeto (FE_GRID)
 
-  // Inicializar dispositivos simulados
-  useEffect(() => {
-    const initialDevices = [
-      { id: 'device_001', name: 'HVAC - Andar 1', site: 'Prédio Principal', floor: '1', type: 'hvac', status: 'online', baseline: 45 },
-      { id: 'device_002', name: 'Iluminação - Andar 1', site: 'Prédio Principal', floor: '1', type: 'lighting', status: 'online', baseline: 12 },
-      { id: 'device_003', name: 'HVAC - Andar 2', site: 'Prédio Principal', floor: '2', type: 'hvac', status: 'online', baseline: 48 },
-      { id: 'device_004', name: 'Data Center', site: 'Prédio Principal', floor: 'Subsolo', type: 'datacenter', status: 'online', baseline: 85 },
-      { id: 'device_005', name: 'Elevadores', site: 'Prédio Principal', floor: 'Todos', type: 'elevator', status: 'online', baseline: 18 },
-      { id: 'device_006', name: 'HVAC - Andar 3', site: 'Prédio Principal', floor: '3', type: 'hvac', status: 'online', baseline: 42 }
-    ];
+  // Função para buscar dados da API
+  const fetchReadings = async () => {
+    try {
+      // Buscar últimas leituras (últimas 100) - API já retorna ordenado por ts desc
+      const response = await fetch(`${apiUrl}/readings?limit=100`);
+      if (!response.ok) throw new Error('Erro ao buscar leituras');
+      
+      const readings = await response.json();
+      if (!readings || readings.length === 0) {
+        setIsConnected(false);
+        return;
+      }
 
-    const devicesWithData = initialDevices.map(dev => ({
-      ...dev,
-      kwh: dev.baseline + (Math.random() - 0.5) * 5,
-      kw: dev.baseline + (Math.random() - 0.5) * 5,
-      voltage: 220 + (Math.random() - 0.5) * 10,
-      current: (dev.baseline / 0.22) + (Math.random() - 0.5) * 20,
-      powerFactor: 0.85 + Math.random() * 0.12,
-      lastUpdate: new Date()
-    }));
+      setIsConnected(true);
+      setLastUpdate(new Date());
 
-    setDevices(devicesWithData);
-    if (!selectedDevice) setSelectedDevice(devicesWithData[0]);
+      // Agrupar leituras por device_id
+      const devicesMap = new Map();
+      const deviceBaselines = new Map();
 
-    // Inicializar dados históricos
-    const historical = [];
-    for (let i = 60; i >= 0; i--) {
-      const timestamp = new Date(Date.now() - i * 60000);
-      historical.push({
-        time: timestamp.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
-        ...devicesWithData.reduce((acc, dev) => {
-          acc[dev.id] = dev.baseline + (Math.random() - 0.5) * 8;
-          return acc;
-        }, {})
+      readings.forEach(reading => {
+        const deviceId = reading.device_id || 'unknown';
+        const deviceType = reading.device_type || 'unknown';
+        
+        if (!devicesMap.has(deviceId)) {
+          devicesMap.set(deviceId, {
+            id: deviceId,
+            name: `${deviceType} - ${reading.site_id || 'N/A'}`,
+            site: reading.site_id || 'N/A',
+            floor: reading.andar?.toString() || 'N/A',
+            type: deviceType.toLowerCase(),
+            status: 'online',
+            readings: [],
+            totalKwh: 0,
+            totalEmissions: 0
+          });
+          deviceBaselines.set(deviceId, reading.kw || 0);
+        }
+
+        const device = devicesMap.get(deviceId);
+        device.readings.push(reading);
+        device.totalKwh += reading.kwh_interval || 0;
+        device.totalEmissions += reading.emissoes_tco2e || 0;
       });
+
+      // Converter para array e calcular valores atuais
+      const devicesArray = Array.from(devicesMap.values()).map(device => {
+        const latestReading = device.readings[0]; // Mais recente (primeira do array ordenado)
+        const baseline = deviceBaselines.get(device.id) || latestReading.kw || 0;
+        
+        // Calcular corrente e tensão estimados (se não disponíveis)
+        const voltage = 220; // Valor padrão
+        const current = (latestReading.kw / 0.22) || 0;
+        const powerFactor = 0.90; // Valor padrão
+
+        // Detectar anomalias
+        if (latestReading.is_anomaly) {
+          setAlerts(prev => {
+            const newAlert = {
+              id: `alert_${latestReading.id}_${device.id}`,
+              deviceId: device.id,
+              deviceName: device.name,
+              type: 'anomaly',
+              message: `Anomalia detectada: ${latestReading.kw.toFixed(1)} kW`,
+              timestamp: new Date(latestReading.ts),
+              severity: 'high'
+            };
+            // Evitar duplicatas
+            if (prev.find(a => a.id === newAlert.id)) return prev;
+            return [newAlert, ...prev.slice(0, 9)];
+          });
+        }
+
+        return {
+          ...device,
+          kw: latestReading.kw || 0,
+          kwh: device.totalKwh,
+          voltage: voltage,
+          current: current,
+          powerFactor: powerFactor,
+          baseline: baseline,
+          lastUpdate: new Date(latestReading.ts),
+          temperature: latestReading.temp_ext || 0,
+          isAnomaly: latestReading.is_anomaly || false
+        };
+      });
+
+      setDevices(devicesArray);
+      if (!selectedDevice && devicesArray.length > 0) {
+        setSelectedDevice(devicesArray[0]);
+      } else if (selectedDevice) {
+        // Atualizar dispositivo selecionado
+        const updated = devicesArray.find(d => d.id === selectedDevice.id);
+        if (updated) setSelectedDevice(updated);
+      }
+
+      // Atualizar histórico para gráfico (últimas 60 leituras)
+      // Agrupar leituras por timestamp para criar pontos do gráfico
+      const timestampMap = new Map();
+      
+      // Processar todas as leituras e agrupar por timestamp
+      readings.slice(0, 100).forEach(reading => {
+        const ts = reading.ts;
+        if (!timestampMap.has(ts)) {
+          timestampMap.set(ts, { time: ts, readings: {} });
+        }
+        const point = timestampMap.get(ts);
+        point.readings[reading.device_id] = reading.kw;
+      });
+
+      // Converter para array e ordenar por timestamp (mais antigo primeiro)
+      const historical = Array.from(timestampMap.values())
+        .sort((a, b) => new Date(a.time) - new Date(b.time))
+        .slice(-60) // Últimas 60 leituras
+        .map(point => {
+          const timestamp = new Date(point.time);
+          const timeStr = timestamp.toLocaleTimeString('pt-BR', { 
+            hour: '2-digit', 
+            minute: '2-digit', 
+            second: '2-digit' 
+          });
+          
+          const chartPoint = { time: timeStr };
+          devicesArray.forEach(device => {
+            chartPoint[device.id] = point.readings[device.id] || null;
+          });
+          return chartPoint;
+        });
+
+      setHistoricalData(historical);
+
+      // Calcular estatísticas globais
+      const totalKwh = devicesArray.reduce((sum, d) => sum + d.totalKwh, 0);
+      const totalEmissions = devicesArray.reduce((sum, d) => sum + d.totalEmissions, 0);
+      const activeDevices = devicesArray.filter(d => d.status === 'online').length;
+
+      setGlobalStats({
+        totalKwh: totalKwh,
+        totalDevices: devicesArray.length,
+        activeDevices: activeDevices,
+        totalEmissions: totalEmissions
+      });
+
+      // Atualizar timestamp de referência
+      if (readings.length > 0) {
+        lastTimestampRef.current = readings[0].ts;
+      }
+
+    } catch (error) {
+      console.error('Erro ao buscar dados:', error);
+      setIsConnected(false);
     }
-    setHistoricalData(historical);
+  };
+
+  // Buscar dados iniciais
+  useEffect(() => {
+    fetchReadings();
   }, []);
 
-  // Simulação de dados em tempo real via MQTT
+  // Atualizar dados em tempo real a cada 3 segundos
   useEffect(() => {
-    if (!isSimulating) return;
-
     const interval = setInterval(() => {
-      const now = new Date();
-      
-      // Atualizar dispositivos
-      setDevices(prevDevices => {
-        const updated = prevDevices.map(dev => {
-          const variation = (Math.random() - 0.5) * 6;
-          const newKw = Math.max(0, dev.baseline + variation);
-          const newVoltage = 220 + (Math.random() - 0.5) * 8;
-          const newCurrent = (newKw / 0.22) + (Math.random() - 0.5) * 15;
-          const newPf = Math.min(0.99, Math.max(0.75, 0.85 + (Math.random() - 0.5) * 0.15));
-
-          // Detectar anomalias
-          if (Math.abs(newKw - dev.baseline) > dev.baseline * 0.3) {
-            setAlerts(prev => {
-              const newAlert = {
-                id: `alert_${Date.now()}_${dev.id}`,
-                deviceId: dev.id,
-                deviceName: dev.name,
-                type: 'anomaly',
-                message: `Consumo anormal detectado: ${newKw.toFixed(1)} kW (esperado ~${dev.baseline} kW)`,
-                timestamp: now,
-                severity: 'high'
-              };
-              return [newAlert, ...prev.slice(0, 9)];
-            });
-          }
-
-          return {
-            ...dev,
-            kwh: dev.kwh + (newKw / 60),
-            kw: newKw,
-            voltage: newVoltage,
-            current: newCurrent,
-            powerFactor: newPf,
-            lastUpdate: now
-          };
-        });
-
-        // Calcular estatísticas globais
-        const totalKwh = updated.reduce((sum, d) => sum + d.kwh, 0);
-        const avgPf = updated.reduce((sum, d) => sum + d.powerFactor, 0) / updated.length;
-        const active = updated.filter(d => d.status === 'online').length;
-
-        setGlobalStats({
-          totalKwh: totalKwh,
-          totalDevices: updated.length,
-          activeDevices: active,
-          avgPowerFactor: avgPf
-        });
-
-        return updated;
-      });
-
-      // Atualizar histórico
-      setHistoricalData(prevData => {
-        const newPoint = {
-          time: now.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
-          ...devices.reduce((acc, dev) => {
-            acc[dev.id] = dev.kw;
-            return acc;
-          }, {})
-        };
-        return [...prevData.slice(-59), newPoint];
-      });
-    }, 3000);
+      fetchReadings();
+    }, 3000); // Atualizar a cada 3 segundos (mesmo intervalo do ESP32)
 
     return () => clearInterval(interval);
-  }, [isSimulating, devices]);
+  }, [apiUrl]);
 
-  const totalEmissions = globalStats.totalKwh * EMISSION_FACTOR;
+  const totalEmissions = globalStats.totalEmissions || (globalStats.totalKwh * EMISSION_FACTOR);
 
   const getDeviceColor = (type) => {
     const colors = {
@@ -160,19 +218,34 @@ const IoTEnergyMonitor = () => {
           <div className="flex items-center justify-between mb-4">
             <div>
               <h1 className="text-4xl font-bold mb-2 bg-gradient-to-r from-green-400 to-blue-500 bg-clip-text text-transparent">
-                Monitor IoT - Energia em Tempo Real
+                🌱 GREEN WORK HUB - Monitor IoT
               </h1>
-              <p className="text-slate-400">Sistema de monitoramento via MQTT/HTTP</p>
+              <p className="text-slate-400">Sistema de monitoramento em tempo real via API</p>
+              <div className="flex items-center gap-2 mt-2">
+                {isConnected ? (
+                  <>
+                    <Wifi className="text-green-500" size={16} />
+                    <span className="text-green-400 text-sm">Conectado à API</span>
+                  </>
+                ) : (
+                  <>
+                    <WifiOff className="text-red-500" size={16} />
+                    <span className="text-red-400 text-sm">Desconectado</span>
+                  </>
+                )}
+                {lastUpdate && (
+                  <span className="text-slate-500 text-xs ml-2">
+                    Última atualização: {lastUpdate.toLocaleTimeString('pt-BR')}
+                  </span>
+                )}
+              </div>
             </div>
             <button
-              onClick={() => setIsSimulating(!isSimulating)}
-              className={`px-6 py-3 rounded-lg font-semibold transition-all ${
-                isSimulating 
-                  ? 'bg-red-600 hover:bg-red-700' 
-                  : 'bg-green-600 hover:bg-green-700'
-              }`}
+              onClick={fetchReadings}
+              className="px-6 py-3 rounded-lg font-semibold transition-all bg-blue-600 hover:bg-blue-700 flex items-center gap-2"
             >
-              {isSimulating ? '⏸ Pausar Simulação' : '▶ Iniciar Simulação'}
+              <RefreshCw size={18} />
+              Atualizar Agora
             </button>
           </div>
 
@@ -202,12 +275,12 @@ const IoTEnergyMonitor = () => {
 
             <div className="bg-slate-800/50 backdrop-blur border border-slate-700 rounded-xl p-4">
               <div className="flex items-center justify-between mb-2">
-                <span className="text-slate-400 text-sm">Fator de Potência Médio</span>
+                <span className="text-slate-400 text-sm">Emissões Totais</span>
                 <TrendingUp className="text-blue-500" size={20} />
               </div>
-              <div className="text-2xl font-bold">{globalStats.avgPowerFactor.toFixed(3)}</div>
-              <div className={`text-xs mt-1 ${globalStats.avgPowerFactor > 0.92 ? 'text-green-400' : 'text-yellow-400'}`}>
-                {globalStats.avgPowerFactor > 0.92 ? 'Excelente' : 'Bom'}
+              <div className="text-2xl font-bold">{totalEmissions.toFixed(6)} tCO₂e</div>
+              <div className="text-xs text-slate-400 mt-1">
+                {globalStats.totalKwh.toFixed(2)} kWh acumulado
               </div>
             </div>
 
@@ -257,9 +330,15 @@ const IoTEnergyMonitor = () => {
                     {device.site} • {device.floor}
                   </div>
                   <div className="flex justify-between text-sm">
-                    <span className="text-slate-300">{device.kw.toFixed(1)} kW</span>
-                    <span className="text-slate-400">{device.voltage.toFixed(0)}V</span>
+                    <span className="text-slate-300">{device.kw.toFixed(2)} kW</span>
+                    <span className="text-slate-400">{device.temperature?.toFixed(1) || 'N/A'}°C</span>
                   </div>
+                  {device.isAnomaly && (
+                    <div className="mt-1 text-xs text-orange-400 flex items-center gap-1">
+                      <AlertTriangle size={12} />
+                      Anomalia detectada
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -313,17 +392,26 @@ const IoTEnergyMonitor = () => {
                     <div className="text-2xl font-bold">{selectedDevice.current.toFixed(1)} A</div>
                   </div>
                   <div className="bg-slate-700/50 rounded-lg p-3">
-                    <div className="text-xs text-slate-400 mb-1">Fator de Potência</div>
-                    <div className="text-2xl font-bold">{selectedDevice.powerFactor.toFixed(3)}</div>
+                    <div className="text-xs text-slate-400 mb-1">Temperatura Externa</div>
+                    <div className="text-2xl font-bold">{selectedDevice.temperature?.toFixed(1) || 'N/A'}°C</div>
                   </div>
                   <div className="bg-slate-700/50 rounded-lg p-3">
                     <div className="text-xs text-slate-400 mb-1">Consumo Acumulado</div>
-                    <div className="text-2xl font-bold">{selectedDevice.kwh.toFixed(2)} kWh</div>
+                    <div className="text-2xl font-bold">{selectedDevice.kwh.toFixed(4)} kWh</div>
                   </div>
                   <div className="bg-slate-700/50 rounded-lg p-3">
-                    <div className="text-xs text-slate-400 mb-1">Emissões</div>
-                    <div className="text-2xl font-bold">{(selectedDevice.kwh * EMISSION_FACTOR).toFixed(3)} kg</div>
+                    <div className="text-xs text-slate-400 mb-1">Emissões Totais</div>
+                    <div className="text-2xl font-bold">{selectedDevice.totalEmissions.toFixed(6)} tCO₂e</div>
                   </div>
+                  {selectedDevice.isAnomaly && (
+                    <div className="bg-red-900/30 border border-red-700 rounded-lg p-3 col-span-3">
+                      <div className="text-xs text-red-400 mb-1 flex items-center gap-2">
+                        <AlertTriangle size={16} />
+                        Anomalia Detectada
+                      </div>
+                      <div className="text-sm text-red-300">Consumo fora do padrão normal</div>
+                    </div>
+                  )}
                 </div>
                 <div className="mt-4 text-xs text-slate-400">
                   Última atualização: {selectedDevice.lastUpdate.toLocaleTimeString('pt-BR')}

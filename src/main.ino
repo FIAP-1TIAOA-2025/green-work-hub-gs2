@@ -49,7 +49,7 @@
 // CONSTANTES
 // ============================================================================
 #define FE_GRID 0.08  // Fator de emissão (kgCO2e/kWh)
-#define READING_INTERVAL_MS 900000  // 15 minutos em ms
+#define READING_INTERVAL_MS 3000  // 3 segundos em ms (tempo real)
 #define MAX_READINGS 100  // Máximo de leituras em memória
 
 // ============================================================================
@@ -210,7 +210,7 @@ EnergyReading takeReading() {
   
   reading.timestamp = getTimestamp();
   reading.kw = kw;
-  reading.kwh_interval = kw * (15.0 / 60.0);  // 15 minutos em horas
+  reading.kwh_interval = kw * (3.0 / 3600.0);  // 3 segundos em horas (3/3600)
   reading.emissoes_tco2e = (reading.kwh_interval * FE_GRID) / 1000.0;  // Converter para toneladas
   reading.temp_ext = temp;
   reading.eh_fds = isWeekend();
@@ -525,19 +525,25 @@ void setup() {
 void loop() {
   server.handleClient();
   
-  // Fazer leitura a cada 15 minutos (ou 1 minuto para teste)
+  // Fazer leitura a cada 3 segundos (tempo real)
   unsigned long currentTime = millis();
   if (currentTime - lastReadingTime >= READING_INTERVAL_MS) {
     EnergyReading reading = takeReading();
     saveReading(reading);
     lastReadingTime = currentTime;
     
-    Serial.println("\n=== Nova Leitura ===");
-    Serial.println(readingToJson(reading));
-    Serial.print("Total de leituras: ");
-    Serial.println(readingCount);
+    // Imprimir leitura no Serial (apenas resumo para não poluir)
+    Serial.print("[");
+    Serial.print(reading.timestamp);
+    Serial.print("] ");
+    Serial.print("kW: ");
+    Serial.print(reading.kw, 2);
+    Serial.print(" | Temp: ");
+    Serial.print(reading.temp_ext, 1);
+    Serial.print("°C | Anomalia: ");
+    Serial.println(reading.is_anomaly ? "SIM" : "NAO");
   }
   
-  delay(100);
+  delay(50);  // Delay menor para resposta mais rápida do servidor
 }
 
