@@ -1,12 +1,18 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Activity,
+  Bot,
   AlertTriangle,
   CheckCircle2,
+  BookOpen,
   KeyRound,
+  MessageCircle,
   Lock,
+  FileText,
+  Send,
   ShieldAlert,
   ShieldCheck,
+  Sparkles,
   TrendingUp,
   Wifi,
   WifiOff,
@@ -31,6 +37,24 @@ const privacyBaseline = [
 const initialPrivacyRequests = [
   { id: 'req-001', type: 'Anonimização', requester: 'colaborador@empresa.com', status: 'concluída', timestamp: new Date(Date.now() - 1000 * 60 * 60) },
   { id: 'req-002', type: 'Exportação de dados', requester: 'dpo@cliente.com', status: 'em análise', timestamp: new Date(Date.now() - 1000 * 60 * 20) }
+];
+
+const nlpKeywords = [
+  { key: 'energia', label: 'Energia' },
+  { key: 'carbono', label: 'Carbono' },
+  { key: 'clima', label: 'Clima' },
+  { key: 'recicla', label: 'Resíduos' },
+  { key: 'agua', label: 'Água' },
+  { key: 'treinamento', label: 'Treinamento' },
+  { key: 'sustent', label: 'Sustentabilidade' },
+  { key: 'compliance', label: 'Governança' }
+];
+
+const chatbotQuickPrompts = [
+  'Sugira cortes rápidos de consumo sem afetar conforto',
+  'Como reduzir emissões do HVAC agora?',
+  'Quais ações de educação ambiental devo comunicar hoje?',
+  'Monte um plano de ação ESG resumido para o turno'
 ];
 
 const textEncoder = new TextEncoder();
@@ -180,8 +204,165 @@ const IoTEnergyMonitor = () => {
     activeDevices: 0,
     avgPowerFactor: 0
   });
+  const [chatMessages, setChatMessages] = useState(() => [
+    {
+      id: 'bot-welcome',
+      author: 'bot',
+      tone: 'system',
+      content: 'Sou o EcoBot ESG. Monitoro o consumo em tempo real e devolvo ações rápidas para reduzir emissões.',
+      ts: new Date()
+    },
+    {
+      id: 'bot-nudge',
+      author: 'bot',
+      tone: 'auto',
+      content: 'Ative a simulação para sugerir decisões sustentáveis imediatamente e gerar narrativas ESG.',
+      ts: new Date()
+    }
+  ]);
+  const [chatInput, setChatInput] = useState('');
+  const [nlpInput, setNlpInput] = useState('');
+  const [nlpAnalysis, setNlpAnalysis] = useState(null);
+  const [reportNarrative, setReportNarrative] = useState('');
+  const [reportStatus, setReportStatus] = useState('');
+  const [isGeneratingReport, setIsGeneratingReport] = useState(false);
+
+  const prevAlertCountRef = useRef(0);
+  const prevTotalKwhRef = useRef(0);
+  const lastAutoMessageRef = useRef(0);
 
   const EMISSION_FACTOR = 0.233; // kgCO2e/kWh
+
+  const addBotMessage = (content, tone = 'auto') => {
+    const entry = {
+      id: `bot-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`,
+      author: 'bot',
+      tone,
+      content,
+      ts: new Date()
+    };
+    setChatMessages((prev) => [...prev.slice(-11), entry]);
+    lastAutoMessageRef.current = Date.now();
+  };
+
+  const buildBotReply = (text) => {
+    const normalized = text.toLowerCase();
+    const fallbackDevice = selectedDevice || devices[0];
+    const totalDevices = globalStats.totalDevices || devices.length || 1;
+    const onlineDevices = globalStats.activeDevices || devices.filter((d) => d.status === 'online').length;
+    const emissions = (globalStats.totalKwh * EMISSION_FACTOR).toFixed(3);
+
+    let response = `Energia monitorada em ${onlineDevices}/${totalDevices} dispositivos; emissões estimadas ${emissions} tCO₂e.`;
+
+    if (normalized.includes('hvac') || normalized.includes('ar')) {
+      response = 'HVAC consome a maior parte. Use setpoint dinâmico e desligue 30 minutos antes do fim do turno.';
+    } else if (normalized.includes('alerta') || normalized.includes('anomalia')) {
+      response = alerts.length
+        ? `Novo alerta em ${alerts[0].deviceName}: ${alerts[0].message}`
+        : 'Nenhum alerta ativo; mantenha rotinas preventivas.';
+    } else if (normalized.includes('relatorio') || normalized.includes('narrativa')) {
+      response = 'Gerando narrativa ESG resumida com foco ambiental, social e governança.';
+    } else if (normalized.includes('educa') || normalized.includes('treinamento')) {
+      response = 'Use mensagens curtas com meta semanal e destaque o impacto em CO₂ evitado.';
+    }
+
+    const action = fallbackDevice
+      ? `Ajuste ${fallbackDevice.name} para ${(fallbackDevice.kw * 0.95).toFixed(
+          1
+        )} kW e programe desligamento automático fora do expediente.`
+      : 'Desligue circuitos fora do expediente e refine automações.';
+    const learningCall = 'Compartilhe este passo no canal interno e peça feedback do time sobre barreiras.';
+
+    return {
+      id: `bot-${Date.now()}`,
+      author: 'bot',
+      tone: 'guided',
+      content: `${response} ${action} ${learningCall}`,
+      ts: new Date()
+    };
+  };
+
+  const handleQuickPrompt = (prompt) => {
+    const now = new Date();
+    const userEntry = { id: `user-${now.getTime()}`, author: 'user', tone: 'user', content: prompt, ts: now };
+    const botEntry = buildBotReply(prompt);
+    setChatMessages((prev) => [...prev.slice(-11), userEntry, botEntry]);
+  };
+
+  const handleChatSend = () => {
+    const text = chatInput.trim();
+    if (!text) return;
+    const now = new Date();
+    const userEntry = { id: `user-${now.getTime()}`, author: 'user', tone: 'user', content: text, ts: now };
+    const botEntry = buildBotReply(text);
+    setChatMessages((prev) => [...prev.slice(-11), userEntry, botEntry]);
+    setChatInput('');
+  };
+
+  const analyzeLearningText = () => {
+    const text = nlpInput.trim();
+    if (!text) {
+      setNlpAnalysis({
+        clarity: 0,
+        engagement: 0,
+        focusAreas: [],
+        summary: 'Cole um comunicado interno para ver clareza, foco temático e próxima ação.',
+        action: 'Nenhum texto analisado ainda.'
+      });
+      return;
+    }
+
+    const normalized = text.toLowerCase();
+    const sentences = text.split(/[.!?]/).filter((s) => s.trim().length > 0);
+    const keywordHits = nlpKeywords
+      .map((kw) => ({ ...kw, hits: (normalized.match(new RegExp(kw.key, 'g')) || []).length }))
+      .filter((kw) => kw.hits > 0)
+      .sort((a, b) => b.hits - a.hits);
+
+    const clarity = Math.min(100, Math.round(60 + sentences.length * 5 + keywordHits.length * 4));
+    const engagement = Math.min(100, Math.round(55 + Math.min(20, text.length / 80) + keywordHits.length * 5));
+    const callToAction =
+      keywordHits.length > 0
+        ? `Inclua CTA prático sobre ${keywordHits[0].label.toLowerCase()} e defina meta semanal.`
+        : 'Adicione uma meta clara (ex: reduzir 3% do consumo de HVAC nesta semana).';
+
+    setNlpAnalysis({
+      clarity,
+      engagement,
+      focusAreas: keywordHits.map((kw) => kw.label),
+      summary: `Detectados ${keywordHits.length || 'nenhum'} temas ESG; texto com ${sentences.length || 1} frase(s).`,
+      action: callToAction
+    });
+  };
+
+  const generateNarrativeReport = () => {
+    setIsGeneratingReport(true);
+    setReportStatus('Gerando narrativa baseada nos dados em tempo real...');
+    const totalDevices = globalStats.totalDevices || devices.length || 0;
+    const onlineDevices = globalStats.activeDevices || devices.filter((d) => d.status === 'online').length;
+    const emissions = (globalStats.totalKwh * EMISSION_FACTOR).toFixed(3);
+    const critical = alerts[0];
+    const focusDevice =
+      devices.length > 0 ? devices.reduce((prev, dev) => (dev.kw > prev.kw ? dev : prev), devices[0]) : null;
+
+    const narrative = [
+      `Ambiental: consumo acumulado em ${globalStats.totalKwh.toFixed(
+        2
+      )} kWh no turno, emissões estimadas de ${emissions} tCO₂e. ${
+        focusDevice ? `Maior carga: ${focusDevice.name} (${focusDevice.kw.toFixed(1)} kW).` : ''
+      } Planeje redução de 5-8% via setpoint e automação.`,
+      `Social: mantenha comunicação clara com equipes operacionais, compartilhando meta e impacto positivo por área. ${nlpAnalysis?.action || 'Inclua exemplos práticos em avisos rápidos.'}`,
+      `Governança: ${onlineDevices}/${totalDevices} dispositivos online; ${
+        critical ? `alerta recente em ${critical.deviceName}. ` : 'sem alertas críticos. '
+      } Registre auditoria de login e exportações criptografadas no repositório interno.`
+    ].join(' ');
+
+    setTimeout(() => {
+      setReportNarrative(narrative);
+      setReportStatus('Narrativa ESG pronta para ser compartilhada.');
+      setIsGeneratingReport(false);
+    }, 250);
+  };
 
   useEffect(() => {
     const initialDevices = [
@@ -218,6 +399,16 @@ const IoTEnergyMonitor = () => {
       });
     }
     setHistoricalData(historical);
+
+    const totalKwh = devicesWithData.reduce((sum, d) => sum + d.kwh, 0);
+    const avgPf = devicesWithData.reduce((sum, d) => sum + d.powerFactor, 0) / devicesWithData.length;
+    const active = devicesWithData.filter((d) => d.status === 'online').length;
+    setGlobalStats({
+      totalKwh,
+      totalDevices: devicesWithData.length,
+      activeDevices: active,
+      avgPowerFactor: avgPf
+    });
   }, [selectedDevice]);
 
   useEffect(() => {
@@ -302,6 +493,40 @@ const IoTEnergyMonitor = () => {
 
     return () => clearInterval(interval);
   }, [session]);
+
+  useEffect(() => {
+    if (alerts.length > prevAlertCountRef.current && alerts.length > 0) {
+      const latest = alerts[0];
+      addBotMessage(
+        `Recomendação imediata: ${latest.deviceName} com consumo fora do padrão. Reduza setpoint em 5% e confirme presença no local antes de acionar equipe.`,
+        'realtime'
+      );
+    }
+    prevAlertCountRef.current = alerts.length;
+  }, [alerts]);
+
+  useEffect(() => {
+    const now = Date.now();
+    const diff = globalStats.totalKwh - prevTotalKwhRef.current;
+
+    if (
+      isSimulating &&
+      globalStats.totalKwh > 0 &&
+      (diff > 1.5 || globalStats.avgPowerFactor < 0.9) &&
+      now - lastAutoMessageRef.current > 12000
+    ) {
+      addBotMessage(
+        `Sugestão sustentável: consumo acumulado em ${globalStats.totalKwh.toFixed(
+          2
+        )} kWh e fator de potência médio ${globalStats.avgPowerFactor.toFixed(
+          3
+        )}. Ajuste cargas menos críticas e programe desligamento escalonado.`,
+        'realtime'
+      );
+    }
+
+    prevTotalKwhRef.current = globalStats.totalKwh;
+  }, [globalStats, isSimulating]);
 
   const handleOAuthLogin = () => {
     const now = Date.now();
@@ -733,6 +958,176 @@ const IoTEnergyMonitor = () => {
             </div>
             <div className="mt-3 text-xs text-slate-400">
               Simulação inclui: registro de consentimento, direito de esquecimento e exportação criptografada.
+            </div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 mt-6">
+          <div className="xl:col-span-2 bg-slate-800/50 backdrop-blur border border-slate-700 rounded-xl p-4">
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <h2 className="text-xl font-bold flex items-center gap-2">
+                  <Bot size={20} className="text-emerald-400" />
+                  Chatbot ESG em Tempo Real
+                </h2>
+                <p className="text-xs text-slate-400">
+                  Sugestões automáticas ligadas às leituras IoT e geração instantânea de plano sustentável.
+                </p>
+              </div>
+              <div className="text-right text-xs">
+                <div className="flex items-center gap-1 justify-end text-emerald-300">
+                  <Sparkles size={14} />
+                  <span>ativo</span>
+                </div>
+                <p className="text-slate-400">
+                  {alerts.length} alertas · {globalStats.totalKwh.toFixed(1)} kWh
+                </p>
+              </div>
+            </div>
+
+            <div className="bg-slate-900/40 border border-slate-700 rounded-lg p-3 h-72 overflow-y-auto space-y-3 mb-3">
+              {chatMessages.map((msg) => (
+                <div key={msg.id} className={`flex ${msg.author === 'user' ? 'justify-end' : 'justify-start'}`}>
+                  <div
+                    className={`max-w-[78%] rounded-lg p-3 text-sm shadow ${
+                      msg.author === 'user' ? 'bg-emerald-700/70 text-white' : 'bg-slate-700/70 text-slate-100'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-slate-300 mb-1">
+                      {msg.author === 'user' ? (
+                        <MessageCircle size={12} />
+                      ) : (
+                        <Bot size={12} className="text-emerald-300" />
+                      )}
+                      <span>{msg.author === 'user' ? 'Você' : 'EcoBot'}</span>
+                      <span className="text-slate-400">· {msg.tone || 'auto'}</span>
+                    </div>
+                    <div className="text-left leading-relaxed">{msg.content}</div>
+                    <div className="text-[10px] text-slate-400 mt-2">
+                      {msg.ts.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 mb-3">
+              {chatbotQuickPrompts.map((prompt) => (
+                <button
+                  key={prompt}
+                  onClick={() => handleQuickPrompt(prompt)}
+                  className="text-xs bg-slate-700 hover:bg-slate-600 border border-slate-600 rounded-lg px-3 py-2 text-left transition-colors"
+                >
+                  {prompt}
+                </button>
+              ))}
+            </div>
+
+            <div className="flex flex-col sm:flex-row gap-2">
+              <input
+                type="text"
+                value={chatInput}
+                onChange={(e) => setChatInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    handleChatSend();
+                  }
+                }}
+                placeholder="Peça decisões sustentáveis ou um resumo ESG..."
+                className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              />
+              <button
+                onClick={handleChatSend}
+                className="flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 font-semibold text-sm"
+              >
+                <Send size={16} />
+                Enviar
+              </button>
+            </div>
+          </div>
+
+          <div className="space-y-4">
+            <div className="bg-slate-800/50 backdrop-blur border border-slate-700 rounded-xl p-4">
+              <div className="flex items-center justify-between mb-3">
+                <div>
+                  <h3 className="text-lg font-bold flex items-center gap-2">
+                    <BookOpen size={18} className="text-amber-300" />
+                    Análise NLP Educacional
+                  </h3>
+                  <p className="text-xs text-slate-400">Feedback imediato para educação ambiental corporativa.</p>
+                </div>
+                <Sparkles size={16} className="text-emerald-300" />
+              </div>
+              <textarea
+                rows={4}
+                value={nlpInput}
+                onChange={(e) => setNlpInput(e.target.value)}
+                placeholder="Cole um comunicado interno ou mensagem para a equipe..."
+                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <div className="flex items-center justify-between mt-2">
+                <span className="text-xs text-slate-400">Recomenda CTA, clareza e foco ESG.</span>
+                <button
+                  onClick={analyzeLearningText}
+                  className="text-xs bg-blue-600 hover:bg-blue-700 px-3 py-2 rounded-md font-semibold"
+                >
+                  Rodar análise NLP
+                </button>
+              </div>
+              {nlpAnalysis ? (
+                <div className="mt-3 space-y-2 text-sm text-slate-100">
+                  <div className="flex justify-between text-xs">
+                    <span>Clareza</span>
+                    <span>{nlpAnalysis.clarity}%</span>
+                  </div>
+                  <div className="flex justify-between text-xs">
+                    <span>Engajamento</span>
+                    <span>{nlpAnalysis.engagement}%</span>
+                  </div>
+                  <div className="text-xs text-emerald-300">
+                    Foco: {nlpAnalysis.focusAreas.length ? nlpAnalysis.focusAreas.join(', ') : 'Nenhum tema detectado'}
+                  </div>
+                  <div className="text-xs text-slate-300">{nlpAnalysis.summary}</div>
+                  <div className="text-xs text-amber-300">Próximo passo: {nlpAnalysis.action}</div>
+                </div>
+              ) : (
+                <p className="text-xs text-slate-400 mt-2">Cole um comunicado para ver clareza e foco temático.</p>
+              )}
+            </div>
+
+            <div className="bg-slate-800/50 backdrop-blur border border-slate-700 rounded-xl p-4">
+              <div className="flex items-center justify-between mb-3">
+                <div>
+                  <h3 className="text-lg font-bold flex items-center gap-2">
+                    <FileText size={18} className="text-emerald-300" />
+                    Relatório Narrativo ESG
+                  </h3>
+                  <p className="text-xs text-slate-400">Resumo automático para liderança.</p>
+                </div>
+                <Sparkles size={16} className="text-sky-300" />
+              </div>
+              <div className="text-xs text-slate-300 mb-3">
+                Baseado em {globalStats.totalKwh.toFixed(1)} kWh, fator de potência médio{' '}
+                {globalStats.avgPowerFactor.toFixed(3)} e {alerts.length} alerta(s) recente(s).
+              </div>
+              <button
+                onClick={generateNarrativeReport}
+                disabled={isGeneratingReport}
+                className={`w-full flex items-center justify-center gap-2 px-4 py-2 rounded-lg font-semibold text-sm ${
+                  isGeneratingReport ? 'bg-slate-700 text-slate-300' : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                }`}
+              >
+                <FileText size={16} />
+                {isGeneratingReport ? 'Gerando narrativa...' : 'Gerar narrativa ESG'}
+              </button>
+              {reportStatus && <p className="text-xs text-slate-400 mt-2">{reportStatus}</p>}
+              {reportNarrative && (
+                <div className="mt-3 bg-slate-900/40 border border-slate-700 rounded-lg p-3 text-sm text-slate-100 space-y-2">
+                  <p className="leading-relaxed">{reportNarrative}</p>
+                  <div className="text-xs text-slate-400">Fonte: dados ao vivo + monitoramento de alertas.</div>
+                </div>
+              )}
             </div>
           </div>
         </div>
