@@ -15,6 +15,11 @@ Sistema que mede, prevê e reduz pegada de carbono empresarial através de:
 - 📈 **Relatórios ESG automatizados** com blockchain para auditoria transparente
 - 🔍 **Análise preditiva** de padrões de consumo e detecção de anomalias
 
+## 🛡️ O que foi adicionado (cibersegurança e compliance)
+- 🔐 Login OAuth2 simulado no dashboard com sessão de 60 minutos e escopos mínimos
+- 🔑 Exportação de dados criptografada (AES-GCM 256) com senha definida pelo usuário
+- 📜 Simulação de fluxo LGPD/GDPR: registro de pedidos de anonimização/exportação e checklist de privacidade
+
 ## 💡 Como Responde ao Desafio
 
 ### 🤝 **Trabalho Mais Humano**
@@ -138,6 +143,21 @@ install.packages(c("dplyr", "ggplot2", "corrplot", "car", "psych",
                    "lubridate", "tidyr", "RColorBrewer"))
 ```
 
+### Dashboard (React + Vite)
+1. Entre na pasta do dashboard:
+```bash
+cd dashboard
+```
+2. Instale as dependências (uma vez):
+```bash
+npm install
+```
+3. Rode em modo dev:
+```bash
+npm run dev
+```
+4. Acesse a URL exibida no terminal e faça login clicando em **“Entrar com OAuth2 (simulado)”**. A sessão dura 60 minutos.
+
 ### Geração de Dados Sintéticos
 
 ```bash
@@ -197,6 +217,12 @@ O dataset `energy_readings_sinteticos.csv` contém:
   - `eh_fds`: Final de semana (0/1)
   - `eh_horario_comercial`: Horário comercial (0/1)
   - `is_anomaly`: Indicador de anomalia (0/1)
+
+## 🔒 Estratégia de Cibersegurança e Compliance (simulação)
+- **Login OAuth2 simulado**: gera token aleatório com escopos `dashboard:read` e `export:secure`, expira em 60 minutos e pode ser revogado pelo botão “Sair”.
+- **Exportação segura**: botão “Exportar dados criptografados” no dashboard usa WebCrypto (AES-GCM 256 + PBKDF2 120k iterações) para gerar `gwh-secure-export.json`. Defina uma senha forte antes de exportar.
+- **LGPD/GDPR (simples)**: painel registra pedidos de anonimização/exportação, mostra checklist de consentimento/minimização e reforça privacidade by design para dados de IoT.
+- **Dicas de endurecimento**: habilite MFA no IdP, restrinja escopos, registre auditoria de login e mantenha backups criptografados separados do ambiente de produção.
 
 ## 📈 Principais Descobertas
 
@@ -262,4 +288,3 @@ Este projeto é parte de uma solução acadêmica desenvolvida para o Global Sol
 ---
 
 **🌱 Tecnologia para um futuro mais sustentável, inclusivo e humano.**
-
