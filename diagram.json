@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "author": "GREEN WORK HUB",
+  "editor": "wokwi",
+  "parts": [
+    { 
+      "type": "board-esp32-devkit-c-v4", 
+      "id": "esp", 
+      "top": 0, 
+      "left": 0, 
+      "attrs": {} 
+    },
+    {
+      "type": "wokwi-led",
+      "id": "led_status",
+      "top": 20,
+      "left": -50,
+      "attrs": { "color": "blue" }
+    },
+    {
+      "type": "wokwi-resistor",
+      "id": "r_led",
+      "top": 20,
+      "left": -80,
+      "attrs": { "value": "220" }
+    }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "esp:2", "r_led:1", "green", [] ],
+    [ "r_led:2", "led_status:A", "green", [] ],
+    [ "esp:GND.1", "led_status:C", "black", [] ]
+  ],
+  "dependencies": {}
+}

@@ -291,6 +291,49 @@ async def generate_data(db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=f"Erro ao gerar dados: {str(e)}")
 
 
+@app.post("/api/readings")
+async def create_reading(reading_data: dict, db: Session = Depends(get_db)):
+    """Recebe uma leitura do ESP32 e salva no banco"""
+    try:
+        # Converter timestamp string para datetime
+        ts_str = reading_data.get('ts')
+        if isinstance(ts_str, str):
+            ts = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
+        else:
+            ts = datetime.now()
+        
+        # Criar registro
+        reading = EnergyReading(
+            ts=ts,
+            org_id=reading_data.get('org_id', 'org_greenhub'),
+            site_id=reading_data.get('site_id'),
+            andar=int(reading_data.get('andar', 1)),
+            device_id=reading_data.get('device_id'),
+            device_type=reading_data.get('device_type'),
+            kw=float(reading_data.get('kw', 0)),
+            kwh_interval=float(reading_data.get('kwh_interval', 0)),
+            emissoes_tco2e=float(reading_data.get('emissoes_tco2e', 0)),
+            temp_ext=float(reading_data.get('temp_ext', 0)),
+            eh_fds=bool(reading_data.get('eh_fds', 0)),
+            eh_horario_comercial=bool(reading_data.get('eh_horario_comercial', 0)),
+            is_anomaly=bool(reading_data.get('is_anomaly', 0))
+        )
+        
+        db.add(reading)
+        db.commit()
+        db.refresh(reading)
+        
+        return {
+            "message": "Leitura salva com sucesso",
+            "id": reading.id,
+            "device_id": reading.device_id,
+            "kw": reading.kw
+        }
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=f"Erro ao salvar leitura: {str(e)}")
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
